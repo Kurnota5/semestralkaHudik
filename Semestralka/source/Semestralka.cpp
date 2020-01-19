@@ -1,6 +1,7 @@
+
 /*
- * Copyright 2016-2019 NXP
- * All rights reserved.
+ * Copyright (c) 2015, Freescale Semiconductor, Inc.
+ * Copyright 2016-2017 NXP
  *
  * Redistribution and use in source and binary forms, with or without modification,
  * are permitted provided that the following conditions are met:
@@ -12,12 +13,11 @@
  *   list of conditions and the following disclaimer in the documentation and/or
  *   other materials provided with the distribution.
  *
- * o Neither the name of NXP Semiconductor, Inc. nor the names of its
+ * o Neither the name of the copyright holder nor the names of its
  *   contributors may be used to endorse or promote products derived from this
  *   software without specific prior written permission.
  *
  * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
- * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
  * WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
  * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR
  * ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
@@ -27,44 +27,246 @@
  * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
  * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
- 
-/**
- * @file    Semestralka.cpp
- * @brief   Application entry point.
+
+#include "InitFunctions.h"
+
+/*******************************************************************************
+ * Definitions
+ ******************************************************************************/
+/* LPSCI instance and clock */
+
+/*******************************************************************************
+ * Prototypes
+ ******************************************************************************/
+
+/*******************************************************************************
+ * Variables
+ ******************************************************************************/
+
+
+#define VELKOST_BUFFRA 5
+#define MAX_VELKOST_DAT 255
+
+uint8_t g_txBuffer[VELKOST_BUFFRA] = {0};
+uint8_t g_rxBuffer[VELKOST_BUFFRA] = {0};
+
+volatile bool prijataSpravaJePrazdna = true;
+volatile bool txBufferFull = false;
+volatile bool txOnGoing = false;
+volatile bool rxOnGoing = false;
+
+uint8_t dataStartByte = 0xA0;
+uint8_t ackStartByte = 0xA1;
+
+
+uint8_t spravaACK[5] = {0};
+
+lpsci_transfer_t xfer;
+lpsci_transfer_t sendXfer;
+lpsci_transfer_t receiveXfer;
+
+
+#define DVERE 0xF0
+#define MOJA_ADRESA 0X00
+#define MAX_VELKOST_SPRAVY 266
+uint8_t prijataSprava[VELKOST_BUFFRA] = {0};
+
+
+static void delay(uint32_t dlyTicks) {
+	dlyTicks = dlyTicks * 48000;
+	while (dlyTicks--)
+	{
+		__NOP();
+	}
+}
+
+uint8_t CRCTable[256]= 		{
+		0x00,0x5E,0xBC,0xE2,0x61,0x3F,0xDD,0x83,0xC2,0x9C,0x7E,0x20,0xA3,0xFD,0x1F,0x41,
+		0x9D,0xC3,0x21,0x7F,0xFC,0xA2,0x40,0x1E,0x5F,0x01,0xE3,0xBD,0x3E,0x60,0x82,0xDC,
+		0x23,0x7D,0x9F,0xC1,0x42,0x1C,0xFE,0xA0,0xE1,0xBF,0x5D,0x03,0x80,0xDE,0x3C,0x62,
+		0xBE,0xE0,0x02,0x5C,0xDF,0x81,0x63,0x3D,0x7C,0x22,0xC0,0x9E,0x1D,0x43,0xA1,0xFF,
+		0x46,0x18,0xFA,0xA4,0x27,0x79,0x9B,0xC5,0x84,0xDA,0x38,0x66,0xE5,0xBB,0x59,0x07,
+		0xDB,0x85,0x67,0x39,0xBA,0xE4,0x06,0x58,0x19,0x47,0xA5,0xFB,0x78,0x26,0xC4,0x9A,
+		0x65,0x3B,0xD9,0x87,0x04,0x5A,0xB8,0xE6,0xA7,0xF9,0x1B,0x45,0xC6,0x98,0x7A,0x24,
+		0xF8,0xA6,0x44,0x1A,0x99,0xC7,0x25,0x7B,0x3A,0x64,0x86,0xD8,0x5B,0x05,0xE7,0xB9,
+		0x8C,0xD2,0x30,0x6E,0xED,0xB3,0x51,0x0F,0x4E,0x10,0xF2,0xAC,0x2F,0x71,0x93,0xCD,
+		0x11,0x4F,0xAD,0xF3,0x70,0x2E,0xCC,0x92,0xD3,0x8D,0x6F,0x31,0xB2,0xEC,0x0E,0x50,
+		0xAF,0xF1,0x13,0x4D,0xCE,0x90,0x72,0x2C,0x6D,0x33,0xD1,0x8F,0x0C,0x52,0xB0,0xEE,
+		0x32,0x6C,0x8E,0xD0,0x53,0x0D,0xEF,0xB1,0xF0,0xAE,0x4C,0x12,0x91,0xCF,0x2D,0x73,
+		0xCA,0x94,0x76,0x28,0xAB,0xF5,0x17,0x49,0x08,0x56,0xB4,0xEA,0x69,0x37,0xD5,0x8B,
+		0x57,0x09,0xEB,0xB5,0x36,0x68,0x8A,0xD4,0x95,0xCB,0x29,0x77,0xF4,0xAA,0x48,0x16,
+		0xE9,0xB7,0x55,0x0B,0x88,0xD6,0x34,0x6A,0x2B,0x75,0x97,0xC9,0x4A,0x14,0xF6,0xA8,
+		0x74,0x2A,0xC8,0x96,0x15,0x4B,0xA9,0xF7,0xB6,0xE8,0x0A,0x54,0xD7,0x89,0x6B,0x35
+};
+
+/*******************************************************************************
+ * Code
+ ******************************************************************************/
+/* LPSCI user callback */
+void LPSCI_UserCallback(UART0_Type *base, lpsci_dma_handle_t *handle, status_t status, void *userData)
+{
+    userData = userData;
+
+    if (kStatus_LPSCI_TxIdle == status)
+    {
+        txBufferFull = false;
+        txOnGoing = false;
+    }
+
+    if (kStatus_LPSCI_RxIdle == status)
+    {
+    	prijataSpravaJePrazdna = false;
+        rxOnGoing = false;
+    }
+}
+
+/*!
+ * @brief Main function
  */
-#include <stdio.h>
-#include "board.h"
-#include "peripherals.h"
-#include "pin_mux.h"
-#include "clock_config.h"
-#include "MKL25Z4.h"
-#include "fsl_debug_console.h"
-/* TODO: insert other include files here. */
 
-/* TODO: insert other definitions and declarations here. */
+uint8_t generujCRC(uint8_t *data, uint8_t len)
+{
+	uint8_t crc = 0;
+	    for (uint8_t j = 0; j < len; j++)
+	    {
+	    	uint8_t bajt = (uint8_t)(data[j] ^ crc);
+	        crc = (uint8_t)(CRCTable[bajt]);
+	    }
 
+	    return crc;
+}
+
+void zostavSpravuCRC(uint8_t startByte, uint8_t prijimatel, uint8_t * data, uint8_t * vyslednaSprava, uint8_t odosielatel = 0, uint8_t velkostDat = 0) {
+	uint8_t velkostDatpreCRC = velkostDat+2;
+	uint8_t dataPreCRC[velkostDatpreCRC];
+
+	uint8_t velkostVyslednejSpravy = velkostDat+5;
+
+	dataPreCRC[0]=prijimatel;
+	dataPreCRC[1]=odosielatel;
+
+	vyslednaSprava[0] = startByte;
+	vyslednaSprava[1]=prijimatel;
+	vyslednaSprava[2]=odosielatel;
+	vyslednaSprava[3]=velkostDat;
+	for(uint8_t i = 0; i <velkostDat;i++) {
+		dataPreCRC[i+2]= data[i];
+		vyslednaSprava[i+4] = data[i];
+	}
+	uint8_t crcKod = generujCRC(dataPreCRC,velkostDatpreCRC);
+	vyslednaSprava[velkostVyslednejSpravy-1] = crcKod;
+}
+
+void vynulujSpravu() {
+	for(uint16_t i = 0; i<MAX_VELKOST_SPRAVY; i++)  {
+		prijataSprava[i] = 0;
+	}
+}
+
+void odosliSpravu(uint8_t * vyslednaSprava, uint16_t velkostSpravy) {
+	xfer.data = vyslednaSprava;
+	xfer.dataSize = velkostSpravy;
+	txOnGoing = true;
+	LPSCI_TransferSendDMA(LPSCI, &g_lpsciDmaHandle, &xfer);
+	while (txOnGoing){
+	}
+}
+
+void posliACK(uint8_t * vyslednaSprava) {
+	uint8_t velkostSpravy = 5;
+	odosliSpravu(vyslednaSprava, velkostSpravy);
+}
+
+void ovladajDvere(uint8_t cinnost) {
+	uint8_t data[1] = {0};
+	uint8_t vyslednaSprava[6] = {0};
+	data[0] = cinnost;
+	zostavSpravuCRC(0xA0, DVERE, data, vyslednaSprava, MOJA_ADRESA, 0x01);
+	uint8_t velkostSpravy = 6;
+	odosliSpravu(vyslednaSprava, velkostSpravy);
+}
+
+void rozparsujSpravu(uint8_t* pTyp, uint8_t* pOdosielatel, uint8_t*  pVelkostDat, uint8_t* pData, uint8_t*  pCrc ) {
+	*pTyp = prijataSprava[0];
+	*pOdosielatel = prijataSprava[2];
+	*pVelkostDat = prijataSprava[3];
+	uint16_t i;
+	for(i = 0; i < *pVelkostDat; i++) {
+		pData[i] = prijataSprava[i+4];
+	}
+	*pCrc = prijataSprava[i+4];
+}
+
+
+void initVytah() {
+	ovladajDvere(1);
+}
+void spracujSpravu(uint8_t pTyp, uint8_t pOdosielatel, uint8_t  pVelkostDat, uint8_t* pData, uint8_t  pCrc ) {
+	if(pTyp == 0xA0 && pOdosielatel == 0xC4) {
+		ovladajDvere(1);
+	}
+	if(pTyp == 0xA0 && pOdosielatel == 0xC3) {
+		ovladajDvere(0);
+	}
+}
 /*
- * @brief   Application entry point.
- */
+uint8_t spravaJeOK() {
+	uint8_t jeOK = 0;
+	if((prijataSprava[1] == 0xA1 ||prijataSprava[1] == 0xA0 ) && prijataSprava[3] == 0x00) {
+			uint8_t dataPreCRC [2]  = {0};
+			dataPreCRC[0] = prijataSprava[1];
+			dataPreCRC[1] = prijataSprava[2];
+			if(generujCRC(dataPreCRC,2) == prijataSprava[4]){
+				jeOK = 1;
+		}
+	}
+	return jeOK;
+}
+*/
 int main(void) {
 
-  	/* Init board hardware. */
-    BOARD_InitBootPins();
-    BOARD_InitBootClocks();
-    BOARD_InitBootPeripherals();
-  	/* Init FSL debug console. */
-    BOARD_InitDebugConsole();
+    BOARD_InitPins();
+    BOARD_BootClockRUN();
+    CLOCK_SetLpsci0Clock(0x1U);
 
-    PRINTF("Hello World\n");
+nastavDMA();
 
-    /* Force the counter to be placed into memory. */
-    volatile static int i = 0 ;
-    /* Enter an infinite loop, just incrementing a counter. */
-    while(1) {
-        i++ ;
-        /* 'Dummy' NOP to allow source level single stepping of
-            tight while() loop */
-        __asm volatile ("nop");
+
+    sendXfer.data = g_txBuffer;
+    sendXfer.dataSize = VELKOST_BUFFRA;
+    receiveXfer.data = prijataSprava;
+    receiveXfer.dataSize = VELKOST_BUFFRA;
+
+    initVytah();
+
+    uint8_t typ;
+    uint8_t odosielatel;
+    uint8_t velkostDat;
+    uint8_t data[MAX_VELKOST_DAT] = {0};
+    uint8_t crc;
+
+    while (1) {
+    	/* If RX is idle and g_rxBuffer is empty, start to read data to g_rxBuffer. */
+    	if ((!rxOnGoing) && prijataSpravaJePrazdna) {
+    		rxOnGoing = true;
+    		LPSCI_TransferReceiveDMA(LPSCI, &g_lpsciDmaHandle, &receiveXfer);
+    	}
+
+    	/* If TX is idle and g_txBuffer is full, start to send data. */
+    	if ((!txOnGoing) && txBufferFull) {
+    		rozparsujSpravu(&typ, &odosielatel, &velkostDat, data, &crc ); //zistenie co je v sprave
+    		zostavSpravuCRC(0xA1, DVERE, MOJA_ADRESA, spravaACK);	//zostavenie ack. Je mozne ze sa neposle ak mi prave prislo ack ale pripravim si ho dopredu
+    		if(typ == dataStartByte){
+    			posliACK(spravaACK);
+    		}
+    		spracujSpravu(typ, odosielatel, velkostDat, data, crc );
+    	}
+
+    	/* If g_txBuffer is empty and g_rxBuffer is full, copy g_rxBuffer to g_txBuffer. */
+    	if ((!prijataSpravaJePrazdna) && (!txBufferFull)) {
+    		prijataSpravaJePrazdna = true;
+    		txBufferFull = true;
+    	}
     }
-    return 0 ;
 }
+
